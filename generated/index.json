@@ -1,1 +1,11 @@
-{}
+{
+ "1": {
+  "file": "voice1.wav",
+  "voice": "jenny",
+  "language": "en",
+  "emotion": "normal",
+  "speed": 1.0,
+  "text": "hello",
+  "created": "2026-10-18 21:38"
+ }
+}
