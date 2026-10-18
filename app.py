@@ -16,6 +16,7 @@ import re
 
 import numpy as np
 import streamlit as st
+import importlib.metadata
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_CHARS = 20000  # txt file or text box — limit for both
@@ -116,6 +117,89 @@ KPIPE_LANG = {
 }
 
 
+# Model files — agar folder mein na hon (jaise Streamlit Cloud par),
+# to GitHub releases se khud download ho jayengi (ek dafa).
+MODEL_URLS = {
+    "kokoro-v1.0.onnx":
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx",
+    "voices-v1.0.bin":
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin",
+}
+
+
+def _ensure_model_files():
+    missing = [f for f in MODEL_URLS
+               if not os.path.exists(os.path.join(BASE_DIR, f))]
+    if not missing:
+        return
+    import urllib.request
+    st.info("⏳ First run: downloading AI model files (~350MB) — "
+            "one-time, takes a few minutes. Please wait…")
+    bar = st.progress(0.0)
+    total_n = len(missing)
+    try:
+        for i, fname in enumerate(missing):
+            dest = os.path.join(BASE_DIR, fname)
+            tmp = dest + ".part"
+
+            def _hook(blocks, block_size, total, _i=i):
+                done = blocks * block_size
+                frac = (_i + (done / total if total else 0)) / total_n
+                bar.progress(min(1.0, frac))
+
+            urllib.request.urlretrieve(MODEL_URLS[fname], tmp,
+                                       reporthook=_hook)
+            os.replace(tmp, dest)
+    except Exception as e:
+        bar.empty()
+        st.error(f"Model download failed: {e}. Check your connection and "
+                 "reload the page.")
+        st.stop()
+    bar.empty()
+    st.success("✅ Model files ready!")
+
+
+def _apply_onnx_speed_fix(onnx):
+    """kokoro-onnx 0.4.x ka bug-fix: model 'input_ids' wala ho to woh speed
+    zabardasti int32 bhejta hai, jabke kokoro-v1.0.onnx speed ko float mein
+    mangta hai -> [ONNXRuntimeError] Unexpected input data type.
+    kokoro-onnx 0.6.1 mein ye theek hai, lekin woh Python 3.14 par install
+    nahi hota (requires-python <3.14). Is liye yahan model ke ASAL input
+    dtypes parh kar sahi type mein input bhejte hain. 0.5+ par ye patch
+    khud-ba-khud skip ho jata hai."""
+    try:
+        ver = importlib.metadata.version("kokoro-onnx")
+    except Exception:
+        return
+    p = ver.split(".")
+    if not (len(p) >= 2 and p[0] == "0" and p[1] == "4"):
+        return  # 0.5+ mein upstream fix maujood hai
+
+    _T = {"tensor(int64)": np.int64, "tensor(int32)": np.int32,
+          "tensor(float)": np.float32, "tensor(double)": np.float64}
+    dtypes = {i.name: _T.get(i.type, np.float32)
+              for i in onnx.sess.get_inputs()}
+    tokens_key = "input_ids" if "input_ids" in dtypes else "tokens"
+
+    def _fixed_create_audio(self, phonemes, voice, speed):
+        toks = np.array(self.tokenizer.tokenize(phonemes), dtype=np.int64)
+        assert len(toks) <= 510, "phonemes too long for the model"
+        style = np.asarray(voice[len(toks)], dtype=np.float32)
+        dt = np.dtype(dtypes.get("speed", np.float32))
+        sp = float(speed)
+        if dt.kind in "iu" and sp != int(sp):
+            sp = float(max(1, round(sp)))  # int-speed wale model ke liye
+        inputs = {
+            tokens_key: np.array([[0, *toks, 0]], dtype=dtypes[tokens_key]),
+            "style": np.asarray(style, dtype=dtypes.get("style", np.float32)),
+            "speed": np.array([sp], dtype=dt),
+        }
+        audio = self.sess.run(None, inputs)[0]
+        return np.asarray(audio).ravel(), 24000
+
+    onnx._create_audio = _fixed_create_audio.__get__(onnx, type(onnx))
+
+
 @st.cache_resource
 def load_onnx():
     """kokoro_onnx — local .onnx files, light and offline."""
@@ -125,6 +209,7 @@ def load_onnx():
             os.path.join(BASE_DIR, "kokoro-v1.0.onnx"),
             os.path.join(BASE_DIR, "voices-v1.0.bin"),
         )
+        _apply_onnx_speed_fix(model)
         return model, None
     except Exception as e:
         return None, str(e)
@@ -235,9 +320,10 @@ def get_preview(voice_id, language, emotion="normal"):
 # ---------------- PAGE ----------------
 st.set_page_config(page_title="AnmaVoice AI", page_icon="💜")
 _fresh_start_once()  # restart par purani voices saaf, numbering voice1 se
+_ensure_model_files()  # Cloud par model files na hon to khud download
 
 st.title("💜 AnmaVoice AI")
-st.caption("v1.7 · voice previews + emotions + numbered library (fresh each restart)")
+st.caption("v1.9 · cloud-ready (auto model download) + voice previews + emotions + numbered library")
 st.write("Paste your text, choose a voice and a language, then click Generate.")
 
 # 1. Text (type or upload a .txt file)
