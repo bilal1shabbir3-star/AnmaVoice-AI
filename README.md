@@ -2,7 +2,7 @@
 
 💜 Free, fast text-to-speech in your browser — powered by Kokoro v1.0.
 
-**🔴 Live demo:** *(paste your Streamlit Cloud URL here)*
+**🔴 Live demo:** *https://anmavoice-ai.streamlit.app/*
 
 ## ✨ Features
 
